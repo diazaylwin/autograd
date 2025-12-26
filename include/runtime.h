@@ -68,5 +68,6 @@ Tensor neg(Runtime& rt, const Tensor& a);
 // Accumulation + copy
 void add_inplace(Runtime& rt, Tensor& dst, const Tensor& src);
 Tensor clone(Runtime& rt, const Tensor& x);
+Tensor contiguous(Runtime& rt, const Tensor& x);
 
 #endif // RUNTIME_H

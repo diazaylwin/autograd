@@ -1,5 +1,10 @@
+// runtime.cpp (contiguity contract + SIMD-friendly hot loops)
+
 #include "runtime.h"
 #include "utils.h"
+
+#include <cstdlib>  // std::malloc, std::free
+#include <cstring>  // std::memcpy
 
 void runtime_init(Runtime* rt, const uint64_t heap_cap) {
     require(rt != nullptr);
@@ -28,7 +33,8 @@ void runtime_free(Runtime* rt) {
 
 StorageID Runtime::alloc(const uint64_t numel) {
     require(heap != nullptr);
-    require (top + numel <= cap);
+    // overflow-safe
+    require(numel <= cap - top);
 
     Storage s;
     s.offset = top;
@@ -81,11 +87,10 @@ Tensor from_vector(Runtime& rt,
     std::memcpy(rt.base(t.storage), data.data(), sizeof(double) * n);
     return t;
 }
-// ----------------------------------------------------------------------------------------
 
-// -------------------------
+// ----------------------------------------------------------------------------------------
 // small internal helpers
-// -------------------------
+// ----------------------------------------------------------------------------------------
 
 static inline uint64_t numel_from_sizes(const std::vector<uint64_t>& sizes)
 {
@@ -105,146 +110,169 @@ static inline void require_same_shape(const Tensor& a, const Tensor& b)
     require_well_formed(a);
     require_well_formed(b);
     require(a.sizes.size() == b.sizes.size());
-    for (size_t i = 0; i < a.sizes.size(); ++i) 
+    for (size_t i = 0; i < a.sizes.size(); ++i)
     {
         require(a.sizes[i] == b.sizes[i]);
     }
 }
 
-// Map a logical linear index (row-major over sizes) -> storage index using strides/offset.
+static inline bool is_contiguous(const Tensor& t)
+{
+    // basic sanity
+    if (t.sizes.size() == 0) return false;
+    if (t.sizes.size() != t.strides.size()) return false;
+
+    // enforce offset == 0 for now (strict contract)
+    if (t.offset != 0) return false;
+
+    // row-major stride check
+    uint64_t expected = 1;
+    for (int k = (int)t.sizes.size() - 1; k >= 0; --k)
+    {
+        if (t.strides[(size_t)k] != expected) return false;
+        expected *= t.sizes[(size_t)k];
+    }
+    return true;
+}
+
+static inline const double* ptr(const Runtime& rt, const Tensor& t)
+{
+    // If later you relax is_contiguous to allow offset!=0, this still works.
+    return rt.base(t.storage) + t.offset;
+}
+
+static inline double* ptr(Runtime& rt, const Tensor& t)
+{
+    return rt.base(t.storage) + t.offset;
+}
+
+// Keep this around for later view support / materialisation if you want.
+// Not used in hot loops under the contiguity contract.
 static inline uint64_t storage_index_from_linear(const Tensor& t, uint64_t lin)
 {
     uint64_t idx = t.offset;
-
-    // decode lin into multi-index using sizes (row-major), then apply strides
     for (int k = (int)t.sizes.size() - 1; k >= 0; --k) {
         const uint64_t dim = t.sizes[(size_t)k];
-        // dim should be >0 in sane tensors; if you allow 0-sized dims, handle separately
-        const uint64_t ik = (dim == 0) ? 0 : (lin % dim);
+        const uint64_t ik  = (dim == 0) ? 0 : (lin % dim);
         lin = (dim == 0) ? 0 : (lin / dim);
         idx += ik * t.strides[(size_t)k];
     }
     return idx;
 }
 
-// -------------------------
-// Elementwise ops
-// -------------------------
+Tensor contiguous(Runtime& rt, const Tensor& x)
+{
+    require_well_formed(x);
+
+    if (is_contiguous(x)) return x;       // or clone(rt,x) if you want value semantics
+
+    Tensor out = empty(rt, x.sizes);      // contiguous output
+    const uint64_t n = numel_from_sizes(out.sizes);
+
+    const double* xp = rt.base(x.storage);
+    double*       op = rt.base(out.storage);
+
+    for (uint64_t lin = 0; lin < n; ++lin) {
+        op[lin] = xp[storage_index_from_linear(x, lin)];
+    }
+    return out;
+}
+
+// ----------------------------------------------------------------------------------------
+// Elementwise ops (contiguous-only, SIMD-friendly)
+// ----------------------------------------------------------------------------------------
 
 Tensor neg(Runtime& rt, const Tensor& a)
 {
     require_well_formed(a);
+    require(is_contiguous(a));
 
-    Tensor out = empty(rt, a.sizes);                // contiguous output
+    Tensor out = empty(rt, a.sizes);
     const uint64_t n = numel_from_sizes(out.sizes);
 
-    const double* ap = rt.base(a.storage);
-    double* op = rt.base(out.storage);
+    const double* ap = ptr(rt, a);
+    double*       op = ptr(rt, out);
 
-    for (uint64_t lin = 0; lin < n; ++lin) 
-    {
-        const uint64_t ai = storage_index_from_linear(a, lin);
-        op[lin] = -ap[ai];
-    }
+    for (uint64_t i = 0; i < n; ++i) op[i] = -ap[i];
     return out;
 }
 
 Tensor add(Runtime& rt, const Tensor& a, const Tensor& b)
 {
     require_same_shape(a, b);
+    require(is_contiguous(a) && is_contiguous(b));
 
     Tensor out = empty(rt, a.sizes);
     const uint64_t n = numel_from_sizes(out.sizes);
 
-    const double* ap = rt.base(a.storage);
-    const double* bp = rt.base(b.storage);
-    double*       op = rt.base(out.storage);
+    const double* ap = ptr(rt, a);
+    const double* bp = ptr(rt, b);
+    double*       op = ptr(rt, out);
 
-    for (uint64_t lin = 0; lin < n; ++lin) 
-    {
-        const uint64_t ai = storage_index_from_linear(a, lin);
-        const uint64_t bi = storage_index_from_linear(b, lin);
-        op[lin] = ap[ai] + bp[bi];
-    }
+    for (uint64_t i = 0; i < n; ++i) op[i] = ap[i] + bp[i];
     return out;
 }
 
 Tensor mul(Runtime& rt, const Tensor& a, const Tensor& b)
 {
     require_same_shape(a, b);
+    require(is_contiguous(a) && is_contiguous(b));
 
     Tensor out = empty(rt, a.sizes);
     const uint64_t n = numel_from_sizes(out.sizes);
 
-    const double* ap = rt.base(a.storage);
-    const double* bp = rt.base(b.storage);
-    double* op = rt.base(out.storage);
+    const double* ap = ptr(rt, a);
+    const double* bp = ptr(rt, b);
+    double*       op = ptr(rt, out);
 
-    for (uint64_t lin = 0; lin < n; ++lin) 
-    {
-        const uint64_t ai = storage_index_from_linear(a, lin);
-        const uint64_t bi = storage_index_from_linear(b, lin);
-        op[lin] = ap[ai] * bp[bi];
-    }
+    for (uint64_t i = 0; i < n; ++i) op[i] = ap[i] * bp[i];
     return out;
 }
 
 Tensor div(Runtime& rt, const Tensor& a, const Tensor& b)
 {
     require_same_shape(a, b);
+    require(is_contiguous(a) && is_contiguous(b));
 
     Tensor out = empty(rt, a.sizes);
     const uint64_t n = numel_from_sizes(out.sizes);
 
-    const double* ap = rt.base(a.storage);
-    const double* bp = rt.base(b.storage);
-    double* op = rt.base(out.storage);
+    const double* ap = ptr(rt, a);
+    const double* bp = ptr(rt, b);
+    double*       op = ptr(rt, out);
 
-    for (uint64_t lin = 0; lin < n; ++lin) 
-    {
-        const uint64_t ai = storage_index_from_linear(a, lin);
-        const uint64_t bi = storage_index_from_linear(b, lin);
-        op[lin] = ap[ai] / bp[bi];
-    }
+    for (uint64_t i = 0; i < n; ++i) op[i] = ap[i] / bp[i];
     return out;
 }
 
-// -------------------------
-// Accumulation + copy
-// -------------------------
+// ----------------------------------------------------------------------------------------
+// Accumulation + copy (contiguous-only, SIMD-friendly)
+// ----------------------------------------------------------------------------------------
 
 void add_inplace(Runtime& rt, Tensor& dst, const Tensor& src)
 {
     require_same_shape(dst, src);
+    require(is_contiguous(dst) && is_contiguous(src));
 
     const uint64_t n = numel_from_sizes(dst.sizes);
 
-    double* dp = rt.base(dst.storage);
-    const double* sp = rt.base(src.storage);
+    double*       dp = ptr(rt, dst);
+    const double* sp = ptr(rt, src);
 
-    for (uint64_t lin = 0; lin < n; ++lin) 
-    {
-        const uint64_t di = storage_index_from_linear(dst, lin);
-        const uint64_t si = storage_index_from_linear(src, lin);
-        dp[di] += sp[si];
-    }
+    for (uint64_t i = 0; i < n; ++i) dp[i] += sp[i];
 }
 
 Tensor clone(Runtime& rt, const Tensor& x)
 {
     require_well_formed(x);
+    require(is_contiguous(x));
 
     Tensor out = empty(rt, x.sizes);
     const uint64_t n = numel_from_sizes(out.sizes);
 
-    const double* xp = rt.base(x.storage);
-    double* op = rt.base(out.storage);
+    const double* xp = ptr(rt, x);
+    double*       op = ptr(rt, out);
 
-    // Even if x is contiguous, this generic path is correct for all strides.
-    for (uint64_t lin = 0; lin < n; ++lin) 
-    {
-        const uint64_t xi = storage_index_from_linear(x, lin);
-        op[lin] = xp[xi];
-    }
+    std::memcpy(op, xp, sizeof(double) * n);
     return out;
 }
