@@ -11,9 +11,15 @@
 struct Tape 
 {
     std::vector<Tensor>  primal;   // size = prog.num_values
-    std::vector<Tensor>  adj;      // size = prog.num_values (optional)
-    std::vector<uint8_t> has_adj;  // 0/1 flags (or use optional<Tensor>)
-    // later: residuals per-node for nontrivial VJP (argmax masks, etc.)
+
+    // Used by backward() (your v0 reverse sweep and/or other paths)
+    std::vector<Tensor>  adj;      // size = prog.num_values
+    std::vector<uint8_t> has_adj;  // 0/1 flags
+
+    // v0 Scan support:
+    // For each ValueID that is a Scan output, store carried states s0..sT.
+    // Empty for non-Scan values.
+    std::vector<std::vector<Tensor>> scan_states;
 };
 
 std::vector<Tensor> execute

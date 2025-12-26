@@ -1,55 +1,55 @@
 #include "rk4.h"
 #include "symbols.h"
 
-static Var rhs_linear(const Var& /*t*/, const Var& y, const Var& theta)
+// rhs(t,y,theta) but t unused here
+static Var rhs_linear(const Var& y, const Var& theta)
 {
     return theta * y;
 }
 
-static Var rk4_step(
-    const Var& t,
-    const Var& y,
-    const Var& dt,
-    const Var& theta
-)
+// one RK4 step, purely symbolic
+static Var rk4_step(const Var& y, const Var& dt, const Var& theta)
 {
-    const Var k1 = rhs_linear(t, y, theta);
-    const Var k2 = rhs_linear(t + 0.5 * dt, y + (0.5 * dt) * k1, theta);
-    const Var k3 = rhs_linear(t + 0.5 * dt, y + (0.5 * dt) * k2, theta);
-    const Var k4 = rhs_linear(t + dt, y + dt * k3, theta);
-    const Var ynext = y + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
+    const Var half = Constant(*y.b, 0.5);
+    const Var two  = Constant(*y.b, 2.0);
+    const Var six  = Constant(*y.b, 6.0);
 
+    const Var k1 = rhs_linear(y, theta);
+    const Var k2 = rhs_linear(y + (half * dt) * k1, theta);
+    const Var k3 = rhs_linear(y + (half * dt) * k2, theta);
+    const Var k4 = rhs_linear(y + dt * k3, theta);
+
+    const Var ynext = y + (dt / 6.0) * (k1 + two * k2 + two * k3 + k4);
     return ynext;
 }
 
-static Var rk4_IVP(
-    const Var& y0,
-    const Var& t0,
-    const Var& dt,
-    const Var& theta,
-    const uint64_t nsteps
-)
-{    
-    Var y = y0;
-    Var t = t0;
+// Build the Scan body program: inputs = [state y, invariants dt, theta], outputs = [y_next]
+static Program build_rk4_body()
+{
+    Builder bb;
 
-    for (uint64_t i = 0; i < nsteps; ++i)
-    {
-        y = rk4_step(t, y, dt, theta);
-        t = t + dt;
-    }
-    return y;
+    Var y     = Input(bb);  // carried state
+    Var dt    = Input(bb);  // invariant #0
+    Var theta = Input(bb);  // invariant #1
+
+    Var y_next = rk4_step(y, dt, theta);
+    return Finalize(bb, std::vector<Var>{ y_next });
 }
 
 Program build_rk4_program(const uint64_t nsteps)
 {
     Builder b;
 
+    // keep your original signature (t0 is still an input for compatibility)
     const Var y0    = Input(b);
-    const Var t0    = Input(b);
+    const Var t0    = Input(b);   (void)t0; // unused in this RHS
     const Var dt    = Input(b);
     const Var theta = Input(b);
 
-    const Var yT = rk4_IVP(y0, t0, dt, theta, nsteps);
+    const Program body = build_rk4_body();
+
+    // Scan repeats the body nsteps times carrying y forward
+    const Var yT = Scan(b, y0, body, (uint32_t)nsteps, std::vector<Var>{ dt, theta });
+
     return Finalize(b, std::vector<Var>{ yT });
 }

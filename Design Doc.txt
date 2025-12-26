@@ -131,3 +131,19 @@ Debugging is going to be tricky.
 We're going to want a gradcheck. Probably directional derivatives. This is probably a full-on API.
 Forward and backward are fundamentally symmetrical.
 Autodiff = graph-to-graph transformation + generic execution.
+
+Big next steps:
+- Systematic control flow i.e. Scan method - Repeat this fixed computation body T times, carrying some state forward.
+- Rematerialisation as a compiler pass (not user code). You want to choose what to save.
+- Write the first dead-code-elimination pass in your IR.
+- Make “backward inputs” explicit and minimal.
+- Provide a “custom op” escape hatch (still automatic for everything else)
+- Add some ops (matmul, transpose etc)
+
+Suggested order
+1.	DCE
+2.	Minimal backward inputs (save-set)
+3.	Custom op
+4.	MatMul/Transpose/ReduceSum nucleus
+5.	Scan (single-carried-state v0)
+6.	Checkpointing/remat for Scan

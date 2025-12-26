@@ -15,6 +15,8 @@ enum class OpTag : uint8_t
     Neg,
     ZeroLike,   // NEW
     Detach,     // NEW
+    Scan, // NEW
+    ScanVJP,
     COUNT,
     // later: Reshape, Slice, Transpose, ReduceSum, Matmul, ...
 };
