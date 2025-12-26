@@ -69,5 +69,6 @@ Tensor neg(Runtime& rt, const Tensor& a);
 void add_inplace(Runtime& rt, Tensor& dst, const Tensor& src);
 Tensor clone(Runtime& rt, const Tensor& x);
 Tensor contiguous(Runtime& rt, const Tensor& x);
+Tensor zero_like(Runtime& rt, const Tensor& x);
 
 #endif // RUNTIME_H

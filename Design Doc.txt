@@ -129,3 +129,5 @@ AD = algebra on the IR, using the tape
 v0 test seems to be working nicely.
 Debugging is going to be tricky. 
 We're going to want a gradcheck. Probably directional derivatives. This is probably a full-on API.
+Forward and backward are fundamentally symmetrical.
+Autodiff = graph-to-graph transformation + generic execution.

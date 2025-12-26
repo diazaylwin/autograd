@@ -24,6 +24,14 @@ std::vector<Tensor> execute
     const std::vector<Tensor>& input_tensors
 );
 
+// Build a VJP (reverse-mode) program for `fwd`.
+//
+// Convention (v0):
+//   bwd.inputs  = [ primals for ALL fwd values v=0..num_values-1, then output seeds ]
+//   bwd.outputs = [ grads aligned with fwd.inputs ]
+//
+Program build_vjp(const Program& fwd);
+
 std::vector<Tensor> backward
 (
     const Program& prog,

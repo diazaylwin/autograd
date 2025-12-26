@@ -276,3 +276,17 @@ Tensor clone(Runtime& rt, const Tensor& x)
     std::memcpy(op, xp, sizeof(double) * n);
     return out;
 }
+
+Tensor zero_like(Runtime& rt, const Tensor& x)
+{
+    require_well_formed(x);
+    require(is_contiguous(x));
+
+    Tensor out = empty(rt, x.sizes);
+    const uint64_t n = numel_from_sizes(out.sizes);
+
+    double* op = ptr(rt, out);
+    for (uint64_t i = 0; i < n; ++i) op[i] = 0.0;
+
+    return out;
+}
