@@ -13,8 +13,9 @@ enum class OpTag : uint8_t
     Mul,
     Div,
     Neg,
-    COUNT,
     ZeroLike,   // NEW
+    Detach,     // NEW
+    COUNT,
     // later: Reshape, Slice, Transpose, ReduceSum, Matmul, ...
 };
 

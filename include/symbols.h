@@ -142,6 +142,7 @@ static inline Var Add(Builder& b, const Var& x, const Var& y) { return emit_bina
 static inline Var Mul(Builder& b, const Var& x, const Var& y) { return emit_binary(b, OpTag::Mul, x, y); }
 static inline Var Div(Builder& b, const Var& x, const Var& y) { return emit_binary(b, OpTag::Div, x, y); }
 static inline Var Neg(Builder& b, const Var& x)               { return emit_unary (b, OpTag::Neg, x); }
+static inline Var Detach(Builder& b, const Var& x) { return emit_unary(b, OpTag::Detach, x); }
 
 // ============================================================
 // Finalize

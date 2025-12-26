@@ -67,6 +67,10 @@ std::vector<Tensor> execute(
             case OpTag::ZeroLike:
                 tape.primal[n.out] = zero_like(rt, tape.primal[n.a]);
                 break;
+            
+            case OpTag::Detach:
+                tape.primal[n.out] = detach(rt, tape.primal[n.a]);
+                break;
 
             default:
                 require(false && "unhandled op in execute()");
@@ -231,6 +235,10 @@ Program build_vjp(const Program& fwd)
 
             case OpTag::Neg:
                 accum_adj(bwd, g, n.a, emit_neg(bwd, ybar));
+                break;
+            
+            case OpTag::Detach:
+                // y = detach(x). Gradient stops here: do nothing.
                 break;
 
             default:

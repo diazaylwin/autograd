@@ -290,3 +290,10 @@ Tensor zero_like(Runtime& rt, const Tensor& x)
 
     return out;
 }
+
+Tensor detach(Runtime& rt, const Tensor& x)
+{
+    // identity in value, but returns a fresh tensor (no alias)
+    // if you want *pure view detach*, you can return x directly, but cloning is simplest.
+    return clone(rt, x);
+}
