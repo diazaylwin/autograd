@@ -1,0 +1,131 @@
+Design Doc
+
+-------------------------------------- Versions -------------------------------------- 
+
+v0:
+
+Data Structures:
+- Primal Values (Tensor):
+    - a pointer to contiguous storage, 
+    - a tuple of (sizes, strides, offset), 
+    - views ?
+    - a dtype (float64)
+    - an identity (TensorId)
+- Primal Environment:
+    - a collection of primal values
+    - a map by identity: TensorStore : TensorId -> TensorData
+- Tape/Graph:
+    - include Op ctx
+    - Node = { OpTag, out: TensorId, ins: [TensorId], ctx } - TBD
+- Adjoint Environment (Gradients):  
+    - Also a collection of tensors but feature differently
+
+Primitive Operations:
+- Creation, view, shape
+- Element-wise Arithmetic
+- Reductions
+- Broadcasting
+- Linear Algebra (e.g. matmul)
+- Custom ops: a way to record a node whose backward is hand-specified
+
+No in-place ops (?). In-place mutation is not allowed in the semantic object being differentiated.
+It is allowed in the runtime that executes that object.
+
+Core Functions:
+- Backward (Reverse-Mode AD): (program, primals, seed) -> adjoints
+
+Examples:
+- Linear regression set up
+- Simple simulation (RK4 integration)
+- Iterative solver unrolled (tests long tapes + checkpointing later)
+- Atomic solve with implicit VJP (tests custom op interface)
+
+Tests/Utils:
+- Finite difference checker
+
+-------------------------------------- Design Philosophy -------------------------------------- 
+
+Want to design an autograd engine with three key applications in mind: 
+- Classic ML and Inverse Problems i.e. differentiating a loss function with respect to the weights.
+- PDE-Constrained Optimisation, differentiating through a PDE solved.
+- Optimal Control, differentiating through simulation dynamics.
+
+I strongly favour a procedural-style C++. Data is the ticker of a turing machine.
+The only “dynamic dispatch” is a switch on an enum.
+
+However, in this case Autograd is not a program that runs; it is a mathematical object that is transformed — and types are how you represent mathematical objects. So that, for the engine core, 
+we favour a type-drive/functional programming perspective. 
+
+2nd order methods will prove useful. It's worth baking these in from the jump.
+
+At the bottom:
+- state = memory + time
+- code = controlled transitions of state
+
+Good design is about:
+- localising state
+- making mutations explicit
+- making it hard to mutate the wrong thing
+
+Using free functions reinforces that separation:
+- the function signature tells you what state is touched
+- nothing is mutated implicitly via this
+- you can reason locally about effects
+
+Never let a function mutate more state than it explicitly receives.
+
+-------------------------------------- Notes -------------------------------------- 
+
+JVP - Jacobian-Vector product
+VJP - Vector-Jacobian product
+HVP - Hessian-Vector product
+
+Book: Evaluating Derivatives: Principles and Techniques of Algorithmic Differentiation
+
+Autograd differentiates a program and outputs another program whose execution computes sensitivities.
+So for autograd to even make sense, the thing being differentiated must denote a function.
+
+-------------------------------------- Running Commentary -------------------------------------- 
+
+23/12/25 - First Thoughts
+The first step is to create a Tensor class/struct of arbitrary rank.
+More advanced data types are not interesting, where they are used they always boil down to array-like manipulations.
+We'll introduce operator overloading later as inline of our core ops. 
+A tensor is: an affine index map into a flat array. Everything else is convenience.
+
+Autodiff needs: 
+- a differentiable value type, an element in a vector space (i.e. a tensor)
+- a record of how those values were computed (i.e. a computational graph or tape)
+- (Optionally but strongly recommended) An environment which holds all primal values.
+
+Core tradeoff = store vs recompoute.
+
+Leaning towards "backward" as a pure function: (program, primals, seed) -> adjoints.
+
+Seed here is the "gradient seed".
+
+Execution is how a program runs on a machine.
+Meaning is the mathematical function the program denotes.
+Autograd differentiates the latter, not the former.
+
+An IR (intermediate representation)-based core is the right foundation.
+Concretely, it is:
+- a graph / DAG
+- whose nodes are operations
+- whose edges are data dependencies
+- whose meaning is a mathematical map, f:inputs→outputs
+This is the object that autograd differentiates.
+Tape: a log of execution
+IR: a representation of meaning
+IR-first mindset: “Differentiate the mathematical operator the algorithm implements.”
+
+24/12/25 
+IR = what function is being computed
+Runtime = how values are represented while computing it
+Tape = what information from execution must be remembered
+AD = algebra on the IR, using the tape
+
+26/12/25 
+v0 test seems to be working nicely.
+Debugging is going to be tricky. 
+We're going to want a gradcheck. Probably directional derivatives. This is probably a full-on API.
