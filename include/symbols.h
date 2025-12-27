@@ -35,7 +35,8 @@ struct Node
     uint32_t nargs    = 0;
     uint32_t args_off = 0;
 
-    // NEW: extra outputs (for multi-output ops like ScanVJP)
+    // Extra outputs for multi-output ops (e.g., ScanVJP)
+    // Use node_output() and node_num_outputs() accessors
     uint32_t nouts    = 0;
     uint32_t outs_off = 0;
 };
@@ -71,6 +72,24 @@ struct Program
     // Call side table (library functions)
     std::vector<Program> call_bodies;  // Call nodes: attr indexes this
 };
+
+// ============================================================
+// Multi-output accessors
+// ============================================================
+
+// Number of outputs for a node (primary + extras)
+static inline uint32_t node_num_outputs(const Node& n)
+{
+    return 1u + n.nouts;
+}
+
+// Get the i-th output of a node (0 = primary, 1.. = extras)
+static inline ValueID node_output(const Program& p, const Node& n, uint32_t i)
+{
+    if (i == 0u) return n.out;
+    require(i <= n.nouts && "output index out of range");
+    return p.outs[(size_t)n.outs_off + (size_t)(i - 1u)];
+}
 
 struct Builder;
 
