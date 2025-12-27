@@ -106,6 +106,21 @@ static Program dce_impl(const Program& p)
                 mark_live(live, n.a);
                 break;
 
+            case OpTag::Custom:
+                mark_args_live(live, p, n.args_off, n.nargs);
+                break;
+
+            case OpTag::CustomVJP:
+                mark_live(live, n.a);  // seed
+                mark_args_live(live, p, n.args_off, n.nargs);  // primals
+                // Mark all extra outputs as live
+                for (uint32_t j = 0; j < n.nouts; ++j)
+                {
+                    const ValueID extra = p.outs[(size_t)n.outs_off + (size_t)j];
+                    mark_live(live, extra);
+                }
+                break;
+
             case OpTag::Scan:
                 mark_live(live, n.a);
                 mark_args_live(live, p, n.args_off, n.nargs);
@@ -147,6 +162,9 @@ static Program dce_impl(const Program& p)
     out.call_bodies.reserve(p.call_bodies.size());
     for (size_t i = 0; i < p.call_bodies.size(); ++i)
         out.call_bodies.push_back(dce_impl(p.call_bodies[i]));
+
+    // Copy custom ops (opaque, no recursion)
+    out.custom_ops = p.custom_ops;
 
     // Keep only live nodes
     for (size_t i = 0; i < p.nodes.size(); ++i)
@@ -208,6 +226,9 @@ static Program cse_impl(const Program& p)
     for (size_t i = 0; i < p.call_bodies.size(); ++i)
         out.call_bodies.push_back(cse_impl(p.call_bodies[i]));
 
+    // Copy custom ops (opaque, no recursion)
+    out.custom_ops = p.custom_ops;
+
     // Process nodes
     for (size_t i = 0; i < p.nodes.size(); ++i)
     {
@@ -244,7 +265,9 @@ static Program cse_impl(const Program& p)
                 break;
 
             case OpTag::Call:
-                // Don't CSE Call nodes (different bodies, complex)
+            case OpTag::Custom:
+            case OpTag::CustomVJP:
+                // Don't CSE these (opaque, complex)
                 out.nodes.push_back(n);
                 continue;
 

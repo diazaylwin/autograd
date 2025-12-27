@@ -106,6 +106,71 @@ std::vector<Tensor> execute(
                 break;
             }
 
+            case OpTag::Custom:
+            {
+                require(n.attr < prog.custom_ops.size());
+                const CustomOp& op = prog.custom_ops[n.attr];
+                require(n.nargs == op.num_inputs);
+                require(n.args_off + n.nargs <= prog.args.size());
+
+                // Gather inputs
+                std::vector<Tensor> ins(op.num_inputs);
+                for (uint32_t i = 0; i < op.num_inputs; ++i)
+                {
+                    const ValueID v = prog.args[(size_t)n.args_off + (size_t)i];
+                    require(v < prog.num_values);
+                    ins[i] = tape.primal[(size_t)v];
+                }
+
+                // Single output for now
+                Tensor out = empty(rt, ins[0].sizes);  // assume same shape as first input
+                op.forward(rt, ins.data(), &out);
+
+                tape.primal[(size_t)n.out] = out;
+                break;
+            }
+
+            case OpTag::CustomVJP:
+            {
+                require(n.attr < prog.custom_ops.size());
+                const CustomOp& op = prog.custom_ops[n.attr];
+
+                // n.nargs = num_inputs + 1 (includes output primal)
+                const uint32_t num_inputs = op.num_inputs;
+                require(n.nargs == num_inputs + 1);
+                require(n.args_off + n.nargs <= prog.args.size());
+
+                // Gather primals: [input_primals..., output_primal]
+                std::vector<Tensor> primals(n.nargs);
+                for (uint32_t i = 0; i < n.nargs; ++i)
+                {
+                    const ValueID v = prog.args[(size_t)n.args_off + (size_t)i];
+                    require(v < prog.num_values);
+                    primals[i] = tape.primal[(size_t)v];
+                }
+
+                // Seed is in n.a
+                const Tensor& seed = tape.primal[(size_t)n.a];
+
+                // Allocate grads (one per input)
+                std::vector<Tensor> grads(num_inputs);
+                for (uint32_t i = 0; i < num_inputs; ++i)
+                    grads[i] = empty(rt, primals[i].sizes);
+
+                // Call user's backward
+                op.backward(rt, primals.data(), &seed, grads.data());
+
+                // Write outputs
+                tape.primal[(size_t)n.out] = grads[0];
+                for (uint32_t i = 1; i < num_inputs; ++i)
+                {
+                    require(n.outs_off + (i - 1) < prog.outs.size());
+                    const ValueID out_id = prog.outs[(size_t)n.outs_off + (size_t)(i - 1)];
+                    tape.primal[(size_t)out_id] = grads[i];
+                }
+                break;
+            }
+
             case OpTag::Scan:
             {
                 require(n.attr < prog.scans.size());
@@ -633,6 +698,70 @@ Program build_vjp(const Program& fwd)
                     ValueID grad_a = cb_remap[(size_t)cb.p.outputs[0]];
                     accum_adj_v(bwd, g, n.a, grad_a);
                 }
+                break;
+            }
+
+            case OpTag::Custom:
+            {
+                require(n.attr < fwd.custom_ops.size());
+                const CustomOp& op = fwd.custom_ops[n.attr];
+                require(n.args_off + n.nargs <= fwd.args.size());
+
+                // Copy custom op to backward program
+                const uint32_t bwd_op_id = (uint32_t)bwd.p.custom_ops.size();
+                bwd.p.custom_ops.push_back(op);
+
+                // Gather input primal ValueIDs (in bwd program)
+                std::vector<ValueID> input_primals;
+                std::vector<ValueID> input_fwd_ids;
+                input_primals.reserve(n.nargs);
+                input_fwd_ids.reserve(n.nargs);
+                for (uint32_t i = 0; i < n.nargs; ++i)
+                {
+                    const ValueID fwd_v = fwd.args[(size_t)n.args_off + (size_t)i];
+                    input_fwd_ids.push_back(fwd_v);
+                    input_primals.push_back(primal_in[(size_t)fwd_v]);
+                }
+
+                // Output primal
+                const ValueID output_primal = primal_in[(size_t)n.out];
+
+                // Store primals in args: [input_primals..., output_primal]
+                const uint32_t args_off = (uint32_t)bwd.p.args.size();
+                for (size_t i = 0; i < input_primals.size(); ++i)
+                    bwd.p.args.push_back(input_primals[i]);
+                bwd.p.args.push_back(output_primal);
+
+                // Allocate outputs: one grad per input
+                const ValueID out0 = bwd.next++;  // first grad
+                const uint32_t outs_off = (uint32_t)bwd.p.outs.size();
+                std::vector<ValueID> grad_ids;
+                grad_ids.push_back(out0);
+                for (uint32_t i = 1; i < n.nargs; ++i)
+                {
+                    const ValueID gid = bwd.next++;
+                    grad_ids.push_back(gid);
+                    bwd.p.outs.push_back(gid);
+                }
+
+                // Emit CustomVJP node
+                Node vjp_n;
+                vjp_n.op       = OpTag::CustomVJP;
+                vjp_n.out      = out0;
+                vjp_n.a        = ybar;  // seed
+                vjp_n.b        = ValueID(0);
+                vjp_n.attr     = bwd_op_id;
+                vjp_n.nargs    = n.nargs + 1;  // input primals + output primal
+                vjp_n.args_off = args_off;
+                vjp_n.nouts    = n.nargs > 1 ? n.nargs - 1 : 0;
+                vjp_n.outs_off = outs_off;
+
+                bwd.p.nodes.push_back(vjp_n);
+
+                // Accumulate grads for each input
+                for (uint32_t i = 0; i < n.nargs; ++i)
+                    accum_adj_v(bwd, g, input_fwd_ids[i], grad_ids[i]);
+
                 break;
             }
 

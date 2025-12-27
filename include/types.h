@@ -22,6 +22,8 @@ enum class OpTag : uint8_t
     Scan,
     ScanVJP,
     Call,       // library function call
+    Custom,     // user-defined op with custom forward/backward
+    CustomVJP,  // backward pass for custom op
     COUNT,
 };
 

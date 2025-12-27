@@ -52,6 +52,26 @@ struct ScanInfo
     // outputs[0] = next state
 };
 
+// Forward declare for function pointer types
+struct Runtime;
+struct Tensor;
+
+struct CustomOp
+{
+    // Forward execution: ins[0..num_inputs), outs[0..num_outputs)
+    void (*forward)(Runtime&, const Tensor* ins, Tensor* outs);
+
+    // Backward: primals = [inputs..., outputs...], seeds = cotangents of outputs
+    //           grads = cotangents of inputs (to write)
+    void (*backward)(Runtime&,
+                     const Tensor* primals,
+                     const Tensor* seeds,
+                     Tensor* grads);
+
+    uint32_t num_inputs;
+    uint32_t num_outputs;
+};
+
 struct Program
 {
     std::vector<ValueID> inputs;
@@ -71,6 +91,9 @@ struct Program
 
     // Call side table (library functions)
     std::vector<Program> call_bodies;  // Call nodes: attr indexes this
+
+    // Custom op registry (escape hatch)
+    std::vector<CustomOp> custom_ops;  // Custom nodes: attr indexes this
 };
 
 // ============================================================
@@ -294,6 +317,45 @@ static inline Var Call(Builder& b, const Program& body, const Var& x)
     n.attr     = body_id;
     n.nargs    = 0u;
     n.args_off = 0u;
+
+    b.p.nodes.push_back(n);
+    return Var{ &b, out };
+}
+
+// ============================================================
+// Custom (user-defined op with custom forward/backward)
+// ============================================================
+
+static inline Var Custom(
+    Builder& b,
+    const CustomOp& op,
+    const std::vector<Var>& inputs
+)
+{
+    require(inputs.size() == op.num_inputs && "Input count mismatch");
+    require(op.num_outputs == 1 && "Multi-output custom ops not yet supported");
+
+    for (size_t i = 0; i < inputs.size(); ++i)
+        require(inputs[i].b == &b && "Var belongs to a different Builder");
+
+    const uint32_t op_id = (uint32_t)b.p.custom_ops.size();
+    b.p.custom_ops.push_back(op);
+
+    // Store inputs in args
+    const uint32_t args_off = (uint32_t)b.p.args.size();
+    for (size_t i = 0; i < inputs.size(); ++i)
+        b.p.args.push_back(inputs[i].id);
+
+    const ValueID out = b.next++;
+
+    Node n;
+    n.op       = OpTag::Custom;
+    n.out      = out;
+    n.a        = ValueID(0);
+    n.b        = ValueID(0);
+    n.attr     = op_id;
+    n.nargs    = (uint32_t)inputs.size();
+    n.args_off = args_off;
 
     b.p.nodes.push_back(n);
     return Var{ &b, out };
