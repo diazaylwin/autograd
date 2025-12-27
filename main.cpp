@@ -7,10 +7,81 @@
 #include "gradcheck.h"
 #include "owned_tensor.h"
 #include "optimization.h"
+#include "library.h"
 #include "utils.h"
+
+static void test_sigmoid()
+{
+    std::cout << "=== Sigmoid test ===\n";
+
+    // Build: y = sum(sigmoid(x))
+    Builder b;
+    Var x = Input(b);
+    Var s = Sigmoid(b, x);
+    Var y = Sum(b, s);
+    Program fwd = Finalize(b, {y});
+
+    CompiledProgram cp;
+    cp.fwd = fwd;
+    cp.bwd = build_vjp(cp.fwd);
+    Optimise(cp);
+
+    Runtime rt;
+    runtime_init(&rt, (uint64_t)1 << 16);
+
+    // Input: small vector
+    OwnedTensor x_in = owned_from_vector({4}, {-1.0, 0.0, 1.0, 2.0});
+
+    std::vector<OwnedTensor> inputs;
+    inputs.push_back(x_in);
+
+    // Seed for scalar output
+    OwnedTensor seed = owned_from_vector({1}, {1.0});
+    std::vector<OwnedTensor> seeds;
+    seeds.push_back(seed);
+
+    // Forward
+    runtime_reset(&rt);
+    std::vector<Tensor> rt_inputs;
+    rt_inputs.push_back(from_vector(rt, x_in.sizes, x_in.data));
+
+    Tape tape;
+    std::vector<Tensor> outs = execute(cp.fwd, rt, tape, rt_inputs);
+    OwnedTensor yT = from_tensor(rt, outs[0]);
+    std::cout << "sum(sigmoid(x)) = " << yT.data[0] << "\n";
+
+    // Gradcheck
+    GradcheckOptions opt;
+    opt.eps  = 1e-6;
+    opt.rtol = 1e-5;
+    opt.atol = 1e-8;
+    opt.seed = 42u;
+    opt.mode = GRADCHECK_COORDINATE;
+    opt.u.coord.max_coords_per_input = 0;
+
+    GradcheckReport rep = gradcheck(cp, rt, inputs, seeds, opt);
+
+    if (rep.ok)
+        std::cout << "sigmoid gradcheck: OK\n";
+    else
+    {
+        std::cout << "sigmoid gradcheck: FAIL\n";
+        std::cout << "  input_index = " << rep.input_index << "\n";
+        std::cout << "  index       = " << rep.index << "\n";
+        std::cout << "  ad          = " << rep.ad << "\n";
+        std::cout << "  fd          = " << rep.fd << "\n";
+        std::cout << "  abs_err     = " << rep.abs_err << "\n";
+    }
+
+    runtime_free(&rt);
+    std::cout << "\n";
+}
 
 int main()
 {
+    // Test library function
+    test_sigmoid();
+
     // 1) Build the IR program
     Program prog = build_rk4_program(100);
 

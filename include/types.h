@@ -6,19 +6,23 @@
 using StorageID = uint32_t;   // where numbers live
 using ValueID   = uint32_t;   // what is computed (symbolic variable)
 
-enum class OpTag : uint8_t 
+enum class OpTag : uint8_t
 {
     Const,
     Add,
     Mul,
     Div,
     Neg,
-    ZeroLike,   // NEW
-    Detach,     // NEW
-    Scan, // NEW
+    Exp,
+    Log,
+    Sum,        // reduction: sum all elements
+    Expand,     // broadcast scalar a to shape of b
+    ZeroLike,
+    Detach,
+    Scan,
     ScanVJP,
+    Call,       // library function call
     COUNT,
-    // later: Reshape, Slice, Transpose, ReduceSum, Matmul, ...
 };
 
 #endif // TYPES_H

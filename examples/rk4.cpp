@@ -12,7 +12,6 @@ static Var rk4_step(const Var& y, const Var& dt, const Var& theta)
 {
     const Var half = Constant(*y.b, 0.5);
     const Var two  = Constant(*y.b, 2.0);
-    const Var six  = Constant(*y.b, 6.0);
 
     const Var k1 = rhs_linear(y, theta);
     const Var k2 = rhs_linear(y + (half * dt) * k1, theta);

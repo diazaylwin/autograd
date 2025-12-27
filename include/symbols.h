@@ -67,6 +67,9 @@ struct Program
     std::vector<Program>  scan_bodies; // owns one-step body programs
     std::vector<ScanInfo> scans;       // Scan nodes reference these by attr
     std::vector<ValueID> outs; // flattened extra outputs for multi-out nodes
+
+    // Call side table (library functions)
+    std::vector<Program> call_bodies;  // Call nodes: attr indexes this
 };
 
 struct Builder;
@@ -244,6 +247,38 @@ static inline Var Mul(Builder& b, const Var& x, const Var& y) { return emit_bina
 static inline Var Div(Builder& b, const Var& x, const Var& y) { return emit_binary(b, OpTag::Div, x, y); }
 static inline Var Neg(Builder& b, const Var& x)               { return emit_unary (b, OpTag::Neg, x); }
 static inline Var Detach(Builder& b, const Var& x)            { return emit_unary (b, OpTag::Detach, x); }
+static inline Var Exp(Builder& b, const Var& x)               { return emit_unary (b, OpTag::Exp, x); }
+static inline Var Log(Builder& b, const Var& x)               { return emit_unary (b, OpTag::Log, x); }
+static inline Var Sum(Builder& b, const Var& x)               { return emit_unary (b, OpTag::Sum, x); }
+static inline Var Expand(Builder& b, const Var& scalar, const Var& like) { return emit_binary(b, OpTag::Expand, scalar, like); }
+
+// ============================================================
+// Call (library function invocation)
+// ============================================================
+
+static inline Var Call(Builder& b, const Program& body, const Var& x)
+{
+    require(x.b == &b && "Var belongs to a different Builder");
+    require(body.inputs.size() == 1 && "Call body must have exactly 1 input");
+    require(body.outputs.size() == 1 && "Call body must have exactly 1 output");
+
+    const uint32_t body_id = (uint32_t)b.p.call_bodies.size();
+    b.p.call_bodies.push_back(body);
+
+    const ValueID out = b.next++;
+
+    Node n;
+    n.op       = OpTag::Call;
+    n.out      = out;
+    n.a        = x.id;
+    n.b        = ValueID(0);
+    n.attr     = body_id;
+    n.nargs    = 0u;
+    n.args_off = 0u;
+
+    b.p.nodes.push_back(n);
+    return Var{ &b, out };
+}
 
 // ============================================================
 // Finalize

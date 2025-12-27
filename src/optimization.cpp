@@ -88,14 +88,22 @@ static Program dce_impl(const Program& p)
             case OpTag::Neg:
             case OpTag::ZeroLike:
             case OpTag::Detach:
+            case OpTag::Exp:
+            case OpTag::Log:
+            case OpTag::Sum:
                 mark_live(live, n.a);
                 break;
 
             case OpTag::Add:
             case OpTag::Mul:
             case OpTag::Div:
+            case OpTag::Expand:
                 mark_live(live, n.a);
                 mark_live(live, n.b);
+                break;
+
+            case OpTag::Call:
+                mark_live(live, n.a);
                 break;
 
             case OpTag::Scan:
@@ -134,6 +142,11 @@ static Program dce_impl(const Program& p)
     out.scan_bodies.reserve(p.scan_bodies.size());
     for (size_t i = 0; i < p.scan_bodies.size(); ++i)
         out.scan_bodies.push_back(dce_impl(p.scan_bodies[i]));
+
+    // Recursively DCE call bodies
+    out.call_bodies.reserve(p.call_bodies.size());
+    for (size_t i = 0; i < p.call_bodies.size(); ++i)
+        out.call_bodies.push_back(dce_impl(p.call_bodies[i]));
 
     // Keep only live nodes
     for (size_t i = 0; i < p.nodes.size(); ++i)
@@ -190,6 +203,11 @@ static Program cse_impl(const Program& p)
     for (size_t i = 0; i < p.scan_bodies.size(); ++i)
         out.scan_bodies.push_back(cse_impl(p.scan_bodies[i]));
 
+    // Recursively CSE call bodies
+    out.call_bodies.reserve(p.call_bodies.size());
+    for (size_t i = 0; i < p.call_bodies.size(); ++i)
+        out.call_bodies.push_back(cse_impl(p.call_bodies[i]));
+
     // Process nodes
     for (size_t i = 0; i < p.nodes.size(); ++i)
     {
@@ -215,8 +233,20 @@ static Program cse_impl(const Program& p)
             case OpTag::Neg:
             case OpTag::ZeroLike:
             case OpTag::Detach:
+            case OpTag::Exp:
+            case OpTag::Log:
+            case OpTag::Sum:
                 key = std::make_tuple(n.op, n.a, (ValueID)0, 0u);
                 break;
+
+            case OpTag::Expand:
+                key = std::make_tuple(n.op, n.a, n.b, 0u);
+                break;
+
+            case OpTag::Call:
+                // Don't CSE Call nodes (different bodies, complex)
+                out.nodes.push_back(n);
+                continue;
 
             case OpTag::Add:
             case OpTag::Mul:
@@ -282,6 +312,8 @@ static size_t count_nodes_recursive(const Program& p)
     size_t total = p.nodes.size();
     for (size_t i = 0; i < p.scan_bodies.size(); ++i)
         total += count_nodes_recursive(p.scan_bodies[i]);
+    for (size_t i = 0; i < p.call_bodies.size(); ++i)
+        total += count_nodes_recursive(p.call_bodies[i]);
     return total;
 }
 

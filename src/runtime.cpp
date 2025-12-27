@@ -245,6 +245,70 @@ Tensor div(Runtime& rt, const Tensor& a, const Tensor& b)
     return out;
 }
 
+Tensor exp(Runtime& rt, const Tensor& a)
+{
+    require_well_formed(a);
+    require(is_contiguous(a));
+
+    Tensor out = empty(rt, a.sizes);
+    const uint64_t n = numel_from_sizes(out.sizes);
+
+    const double* ap = ptr(rt, a);
+    double*       op = ptr(rt, out);
+
+    for (uint64_t i = 0; i < n; ++i) op[i] = std::exp(ap[i]);
+    return out;
+}
+
+Tensor log(Runtime& rt, const Tensor& a)
+{
+    require_well_formed(a);
+    require(is_contiguous(a));
+
+    Tensor out = empty(rt, a.sizes);
+    const uint64_t n = numel_from_sizes(out.sizes);
+
+    const double* ap = ptr(rt, a);
+    double*       op = ptr(rt, out);
+
+    for (uint64_t i = 0; i < n; ++i) op[i] = std::log(ap[i]);
+    return out;
+}
+
+Tensor sum(Runtime& rt, const Tensor& a)
+{
+    require_well_formed(a);
+    require(is_contiguous(a));
+
+    const uint64_t n = numel_from_sizes(a.sizes);
+    const double* ap = ptr(rt, a);
+
+    double s = 0.0;
+    for (uint64_t i = 0; i < n; ++i) s += ap[i];
+
+    // Return scalar as rank-1 {1}
+    Tensor out = empty(rt, std::vector<uint64_t>{1});
+    double* op = ptr(rt, out);
+    op[0] = s;
+    return out;
+}
+
+Tensor expand(Runtime& rt, const Tensor& scalar, const Tensor& like)
+{
+    require_well_formed(scalar);
+    require_well_formed(like);
+    require(scalar.is_scalar() && "expand: first arg must be scalar");
+
+    const double val = ptr(rt, scalar)[0];
+
+    Tensor out = empty(rt, like.sizes);
+    const uint64_t n = numel_from_sizes(out.sizes);
+    double* op = ptr(rt, out);
+
+    for (uint64_t i = 0; i < n; ++i) op[i] = val;
+    return out;
+}
+
 // ----------------------------------------------------------------------------------------
 // Accumulation + copy (contiguous-only, SIMD-friendly)
 // ----------------------------------------------------------------------------------------

@@ -1,5 +1,5 @@
-#ifndef OPTIMIZATION_H
-#define OPTIMIZATION_H
+#ifndef OPTIMISATION_H
+#define OPTIMISATION_H
 
 #include <vector>
 
@@ -46,4 +46,4 @@ Program cse(const Program& p);
 //   3. Computes minimal save_set
 void Optimise(CompiledProgram& cp);
 
-#endif // OPTIMIZATION_H
+#endif // OPTIMISATION_H

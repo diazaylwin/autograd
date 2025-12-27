@@ -64,6 +64,14 @@ Tensor add(Runtime& rt, const Tensor& a, const Tensor& b);
 Tensor mul(Runtime& rt, const Tensor& a, const Tensor& b);
 Tensor div(Runtime& rt, const Tensor& a, const Tensor& b);
 Tensor neg(Runtime& rt, const Tensor& a);
+Tensor exp(Runtime& rt, const Tensor& a);
+Tensor log(Runtime& rt, const Tensor& a);
+
+// Reductions
+Tensor sum(Runtime& rt, const Tensor& a);  // returns scalar {1}
+
+// Broadcasting
+Tensor expand(Runtime& rt, const Tensor& scalar, const Tensor& like);  // broadcast scalar to shape of like
 
 // Accumulation + copy
 void add_inplace(Runtime& rt, Tensor& dst, const Tensor& src);
