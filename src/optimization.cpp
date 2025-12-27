@@ -2,6 +2,8 @@
 #include "utils.h"
 
 #include <vector>
+#include <map>
+#include <tuple>
 #include <cstdio>
 
 // ============================================================
@@ -150,19 +152,137 @@ Program dce(const Program& p)
 }
 
 // ============================================================
+// CSE: common subexpression elimination
+// ============================================================
+
+// Key for CSE lookup: (op, input_a, input_b, attr)
+// For unary ops, b is unused (set to 0).
+// For Const, a and b are unused, attr indexes const_f64.
+using CseKey = std::tuple<OpTag, ValueID, ValueID, uint32_t>;
+
+static ValueID remap(const std::vector<ValueID>& remap_table, const ValueID v)
+{
+    return remap_table[(size_t)v];
+}
+
+static Program cse_impl(const Program& p);
+
+static Program cse_impl(const Program& p)
+{
+    // remap_table[old_id] = new_id after CSE
+    std::vector<ValueID> remap_table(p.num_values);
+    for (uint32_t v = 0; v < p.num_values; ++v)
+        remap_table[v] = (ValueID)v;
+
+    // Map from CSE key to the ValueID that computes it
+    std::map<CseKey, ValueID> seen;
+
+    Program out;
+    out.inputs     = p.inputs;
+    out.num_values = p.num_values;
+    out.const_f64  = p.const_f64;
+    out.scans      = p.scans;
+    out.args       = p.args;
+    out.outs       = p.outs;
+
+    // Recursively CSE scan bodies
+    out.scan_bodies.reserve(p.scan_bodies.size());
+    for (size_t i = 0; i < p.scan_bodies.size(); ++i)
+        out.scan_bodies.push_back(cse_impl(p.scan_bodies[i]));
+
+    // Process nodes
+    for (size_t i = 0; i < p.nodes.size(); ++i)
+    {
+        Node n = p.nodes[i];
+
+        // Remap inputs
+        n.a = remap(remap_table, n.a);
+        n.b = remap(remap_table, n.b);
+
+        // Remap args for Scan/ScanVJP
+        // (We don't modify p.args; we just use remapped values when building key)
+
+        // Build CSE key based on op type
+        CseKey key;
+
+        switch (n.op)
+        {
+            case OpTag::Const:
+                // Key by the constant value (via attr index)
+                key = std::make_tuple(n.op, (ValueID)0, (ValueID)0, n.attr);
+                break;
+
+            case OpTag::Neg:
+            case OpTag::ZeroLike:
+            case OpTag::Detach:
+                key = std::make_tuple(n.op, n.a, (ValueID)0, 0u);
+                break;
+
+            case OpTag::Add:
+            case OpTag::Mul:
+                // Commutative: normalize order
+                if (n.a > n.b)
+                {
+                    ValueID tmp = n.a;
+                    n.a = n.b;
+                    n.b = tmp;
+                }
+                key = std::make_tuple(n.op, n.a, n.b, 0u);
+                break;
+
+            case OpTag::Div:
+                // Not commutative
+                key = std::make_tuple(n.op, n.a, n.b, 0u);
+                break;
+
+            case OpTag::Scan:
+            case OpTag::ScanVJP:
+                // Don't CSE Scan nodes (complex, rarely duplicated)
+                out.nodes.push_back(n);
+                continue;
+
+            default:
+                require(false && "cse: unhandled op");
+        }
+
+        // Check if we've seen this expression
+        auto it = seen.find(key);
+        if (it != seen.end())
+        {
+            // Already computed; remap this output to the existing one
+            remap_table[(size_t)n.out] = it->second;
+        }
+        else
+        {
+            // First time seeing this expression; emit node
+            seen[key] = n.out;
+            out.nodes.push_back(n);
+        }
+    }
+
+    // Remap outputs
+    out.outputs.reserve(p.outputs.size());
+    for (size_t i = 0; i < p.outputs.size(); ++i)
+        out.outputs.push_back(remap(remap_table, p.outputs[i]));
+
+    return out;
+}
+
+Program cse(const Program& p)
+{
+    return cse_impl(p);
+}
+
+// ============================================================
 // Optimise
 // ============================================================
 
-static void print_dce_stats(const char* name, const size_t before, const size_t after)
+static size_t count_nodes_recursive(const Program& p)
 {
-    if (before == 0)
-    {
-        std::printf("%s: 0 nodes\n", name);
-        return;
-    }
-
-    const int reduction = (int)(100.0 * (1.0 - (double)after / (double)before));
-    std::printf("%s: %zu -> %zu nodes (%d%% reduction)\n", name, before, after, reduction);
+    size_t total = p.nodes.size();
+    for (size_t i = 0; i < p.scan_bodies.size(); ++i)
+        total += count_nodes_recursive(p.scan_bodies[i]);
+    return total;
 }
 
 static void compute_save_set(CompiledProgram& cp)
@@ -201,14 +321,21 @@ static void compute_save_set(CompiledProgram& cp)
 
 void Optimise(CompiledProgram& cp)
 {
-    const size_t fwd_before = cp.fwd.nodes.size();
-    const size_t bwd_before = cp.bwd.nodes.size();
+    const size_t fwd_before = count_nodes_recursive(cp.fwd);
+    const size_t bwd_before = count_nodes_recursive(cp.bwd);
 
+    // CSE first (merges duplicates), then DCE (removes dead code)
+    cp.fwd = cse(cp.fwd);
     cp.fwd = dce(cp.fwd);
+
+    cp.bwd = cse(cp.bwd);
     cp.bwd = dce(cp.bwd);
 
-    print_dce_stats("fwd", fwd_before, cp.fwd.nodes.size());
-    print_dce_stats("bwd", bwd_before, cp.bwd.nodes.size());
+    const size_t fwd_after = count_nodes_recursive(cp.fwd);
+    const size_t bwd_after = count_nodes_recursive(cp.bwd);
+
+    std::printf("fwd: %zu -> %zu nodes (-%zu)\n", fwd_before, fwd_after, fwd_before - fwd_after);
+    std::printf("bwd: %zu -> %zu nodes (-%zu)\n", bwd_before, bwd_after, bwd_before - bwd_after);
 
     compute_save_set(cp);
     std::printf("save_set: %zu values (of %u fwd values)\n",

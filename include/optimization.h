@@ -33,6 +33,9 @@ struct CompiledProgram
 // Dead code elimination: removes nodes not needed to compute outputs.
 Program dce(const Program& p);
 
+// Common subexpression elimination: merges duplicate computations.
+Program cse(const Program& p);
+
 // ============================================================
 // Main entry point
 // ============================================================
