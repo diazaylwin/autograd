@@ -4,15 +4,14 @@
 #include <algorithm>  // std::max
 
 static double eval_objective(
-    const Program& prog,
+    const Program& fwd,
     Runtime& rt,
-    Tape& tape,
     const std::vector<OwnedTensor>& inputs,
     const std::vector<OwnedTensor>& seeds
 )
 {
-    require(inputs.size() == prog.inputs.size());
-    require(seeds.size()  == prog.outputs.size());
+    require(inputs.size() == fwd.inputs.size());
+    require(seeds.size()  == fwd.outputs.size());
 
     runtime_reset(&rt);
 
@@ -23,7 +22,8 @@ static double eval_objective(
         rt_inputs.push_back(from_vector(rt, inputs[i].sizes, inputs[i].data));
 
     // forward
-    std::vector<Tensor> outs = execute(prog, rt, tape, rt_inputs);
+    Tape tape;
+    std::vector<Tensor> outs = execute(fwd, rt, tape, rt_inputs);
 
     // dot(outputs, seeds)
     double F = 0.0;
@@ -38,28 +38,39 @@ static double eval_objective(
 }
 
 static std::vector<OwnedTensor> grads_ad(
-    const Program& prog,
+    const CompiledProgram& cp,
     Runtime& rt,
-    Tape& tape,
     const std::vector<OwnedTensor>& inputs,
     const std::vector<OwnedTensor>& seeds
 )
 {
     runtime_reset(&rt);
 
+    // materialise inputs
     std::vector<Tensor> rt_inputs;
     rt_inputs.reserve(inputs.size());
     for (size_t i = 0; i < inputs.size(); ++i)
         rt_inputs.push_back(from_vector(rt, inputs[i].sizes, inputs[i].data));
 
-    std::vector<Tensor> rt_seeds;
-    rt_seeds.reserve(seeds.size());
+    // forward
+    Tape fwd_tape;
+    execute(cp.fwd, rt, fwd_tape, rt_inputs);
+
+    // build backward inputs: [all primals..., seeds...]
+    std::vector<Tensor> bwd_inputs;
+    bwd_inputs.reserve(cp.fwd.num_values + seeds.size());
+
+    for (uint32_t v = 0; v < cp.fwd.num_values; ++v)
+        bwd_inputs.push_back(fwd_tape.primal[(size_t)v]);
+
     for (size_t i = 0; i < seeds.size(); ++i)
-        rt_seeds.push_back(from_vector(rt, seeds[i].sizes, seeds[i].data));
+        bwd_inputs.push_back(from_vector(rt, seeds[i].sizes, seeds[i].data));
 
-    execute(prog, rt, tape, rt_inputs);
-    std::vector<Tensor> grads = backward(prog, rt, tape, rt_seeds);
+    // backward
+    Tape bwd_tape;
+    std::vector<Tensor> grads = execute(cp.bwd, rt, bwd_tape, bwd_inputs);
 
+    // convert to owned
     std::vector<OwnedTensor> out;
     out.reserve(grads.size());
     for (size_t i = 0; i < grads.size(); ++i)
@@ -69,9 +80,8 @@ static std::vector<OwnedTensor> grads_ad(
 }
 
 GradcheckReport gradcheck(
-    const Program& prog,
+    const CompiledProgram& cp,
     Runtime& rt,
-    Tape& tape,
     const std::vector<OwnedTensor>& inputs,
     const std::vector<OwnedTensor>& seeds,
     const GradcheckOptions& opt
@@ -90,8 +100,7 @@ GradcheckReport gradcheck(
     rep.rel_err     = 0.0;
 
     // AD gradients
-    std::vector<OwnedTensor> gad =
-        grads_ad(prog, rt, tape, inputs, seeds);
+    std::vector<OwnedTensor> gad = grads_ad(cp, rt, inputs, seeds);
 
     // ---------------------------
     // Coordinate mode
@@ -115,8 +124,8 @@ GradcheckReport gradcheck(
                 xp[k].data[i] += opt.eps;
                 xm[k].data[i] -= opt.eps;
 
-                double fp = eval_objective(prog, rt, tape, xp, seeds);
-                double fm = eval_objective(prog, rt, tape, xm, seeds);
+                double fp = eval_objective(cp.fwd, rt, xp, seeds);
+                double fm = eval_objective(cp.fwd, rt, xm, seeds);
 
                 double fd = (fp - fm) / (2.0 * opt.eps);
                 double ad = g.data[i];
@@ -182,8 +191,8 @@ GradcheckReport gradcheck(
                 }
             }
 
-            double fp = eval_objective(prog, rt, tape, xp, seeds);
-            double fm = eval_objective(prog, rt, tape, xm, seeds);
+            double fp = eval_objective(cp.fwd, rt, xp, seeds);
+            double fm = eval_objective(cp.fwd, rt, xm, seeds);
             double fd = (fp - fm) / (2.0 * opt.eps);
 
             double ad = 0.0;
@@ -247,7 +256,6 @@ GradcheckReport gradcheck_prefix(
     const Program& prog,
     ValueID out,
     Runtime& rt,
-    Tape& tape,
     const std::vector<OwnedTensor>& inputs,
     const OwnedTensor& seed,
     const GradcheckOptions& opt
@@ -255,11 +263,16 @@ GradcheckReport gradcheck_prefix(
 {
     Program q = prefix_to_value(prog, out);
 
+    // Build CompiledProgram for the prefix
+    CompiledProgram cp;
+    cp.fwd = q;
+    cp.bwd = build_vjp(cp.fwd);
+
     std::vector<OwnedTensor> seeds;
     seeds.reserve(1);
     seeds.push_back(seed);
 
-    GradcheckReport rep = gradcheck(q, rt, tape, inputs, seeds, opt);
+    GradcheckReport rep = gradcheck(cp, rt, inputs, seeds, opt);
     return rep;
 }
 
@@ -267,7 +280,6 @@ static OwnedTensor eval_prefix_output(
     const Program& prog,
     ValueID out,
     Runtime& rt,
-    Tape& tape,
     const std::vector<OwnedTensor>& inputs
 )
 {
@@ -280,6 +292,7 @@ static OwnedTensor eval_prefix_output(
     for (size_t i = 0; i < inputs.size(); ++i)
         rt_inputs.push_back(from_vector(rt, inputs[i].sizes, inputs[i].data));
 
+    Tape tape;
     std::vector<Tensor> outs = execute(q, rt, tape, rt_inputs);
     require(outs.size() == 1);
 
@@ -290,7 +303,6 @@ static OwnedTensor eval_prefix_output(
 GradcheckReport gradcheck_prefixes_until_fail(
     const Program& prog,
     Runtime& rt,
-    Tape& tape,
     const std::vector<OwnedTensor>& inputs,
     const GradcheckOptions& opt
 )
@@ -303,10 +315,10 @@ GradcheckReport gradcheck_prefixes_until_fail(
     {
         const Node& n = prog.nodes[i];
 
-        OwnedTensor out = eval_prefix_output(prog, n.out, rt, tape, inputs);
+        OwnedTensor out = eval_prefix_output(prog, n.out, rt, inputs);
         OwnedTensor seed = ones_like(out);
 
-        GradcheckReport rep = gradcheck_prefix(prog, n.out, rt, tape, inputs, seed, opt);
+        GradcheckReport rep = gradcheck_prefix(prog, n.out, rt, inputs, seed, opt);
 
         if (!rep.ok)
         {

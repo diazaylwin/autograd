@@ -8,6 +8,7 @@
 #include "runtime.h"        // Runtime
 #include "autodiff.h"       // Tape
 #include "owned_tensor.h"   // OwnedTensor
+#include "optimization.h"   // CompiledProgram
 
 enum GradcheckMode : uint8_t
 {
@@ -59,9 +60,8 @@ struct GradcheckReport
 // Whole-program gradcheck for the scalar objective:
 //   F(inputs) = sum_j dot(outputs[j], seeds[j])
 GradcheckReport gradcheck(
-    const Program& prog,
+    const CompiledProgram& cp,
     Runtime& rt,
-    Tape& tape,
     const std::vector<OwnedTensor>& inputs,
     const std::vector<OwnedTensor>& seeds,
     const GradcheckOptions& opt
@@ -69,21 +69,21 @@ GradcheckReport gradcheck(
 
 // Prefix gradcheck: treat internal ValueID `out` as the (only) output.
 // `seed` must match the shape of that output.
+// Builds a temporary CompiledProgram for the prefix internally.
 GradcheckReport gradcheck_prefix(
     const Program& prog,
     ValueID out,
     Runtime& rt,
-    Tape& tape,
     const std::vector<OwnedTensor>& inputs,
     const OwnedTensor& seed,
     const GradcheckOptions& opt
 );
 
 // Scan prefixes in topological order; return first failing prefix (or ok=true).
+// Builds temporary CompiledPrograms for each prefix internally.
 GradcheckReport gradcheck_prefixes_until_fail(
     const Program& prog,
     Runtime& rt,
-    Tape& tape,
     const std::vector<OwnedTensor>& inputs,
     const GradcheckOptions& opt
 );

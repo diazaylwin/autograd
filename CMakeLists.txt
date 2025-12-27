@@ -21,6 +21,7 @@ add_library(miniad_lib
     src/autodiff.cpp
     src/utils.cpp
     src/gradcheck.cpp
+    src/optimization.cpp
     examples/rk4.cpp
 )
 

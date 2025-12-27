@@ -514,34 +514,3 @@ Program build_vjp(const Program& fwd)
     bwd.p.num_values = (uint32_t)bwd.next;
     return bwd.p;
 }
-
-// ============================================================
-// backward = compile + execute (v1)
-// ============================================================
-
-std::vector<Tensor> backward(
-    const Program& prog,
-    Runtime& rt,
-    Tape& tape,
-    const std::vector<Tensor>& output_seeds
-)
-{
-    require(prog.outputs.size() == output_seeds.size());
-    require(tape.primal.size() == prog.num_values);
-
-    Program bwd = build_vjp(prog);
-
-    // v0 convention retained:
-    // bwd.inputs = [all forward primals..., output seeds...]
-    std::vector<Tensor> bwd_inputs;
-    bwd_inputs.reserve((size_t)prog.num_values + prog.outputs.size());
-
-    for (uint32_t v = 0; v < prog.num_values; ++v)
-        bwd_inputs.push_back(tape.primal[(size_t)v]);
-
-    for (size_t i = 0; i < output_seeds.size(); ++i)
-        bwd_inputs.push_back(output_seeds[i]);
-
-    Tape tape_bwd;
-    return execute(bwd, rt, tape_bwd, bwd_inputs);
-}

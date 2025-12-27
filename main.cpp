@@ -6,6 +6,7 @@
 #include "autodiff.h"
 #include "gradcheck.h"
 #include "owned_tensor.h"
+#include "optimization.h"
 #include "utils.h"
 
 int main()
@@ -13,11 +14,16 @@ int main()
     // 1) Build the IR program
     Program prog = build_rk4_program(100);
 
-    // 2) Create runtime + tape
+    // 2) Compile: build VJP + optimise
+    CompiledProgram cp;
+    cp.fwd = prog;
+    cp.bwd = build_vjp(cp.fwd);
+    Optimise(cp);
+
+    // 3) Create runtime
     Runtime rt;
     runtime_init(&rt, (uint64_t)1 << 20);
     runtime_reset(&rt);
-    Tape tape;
 
     // 3) Inputs (scalars = rank-1 {1})
     const double y0    = 1.0;
@@ -44,7 +50,8 @@ int main()
     for (size_t i = 0; i < inputs.size(); ++i)
         rt_inputs.push_back(from_vector(rt, inputs[i].sizes, inputs[i].data));
 
-    std::vector<Tensor> outs = execute(prog, rt, tape, rt_inputs);
+    Tape tape;
+    std::vector<Tensor> outs = execute(cp.fwd, rt, tape, rt_inputs);
     require(outs.size() == 1);
 
     OwnedTensor yT = from_tensor(rt, outs[0]);
@@ -70,7 +77,7 @@ int main()
     opt.mode = GRADCHECK_COORDINATE;
     opt.u.coord.max_coords_per_input = 0; // all coords
 
-    GradcheckReport rep = gradcheck(prog, rt, tape, inputs, seeds, opt);
+    GradcheckReport rep = gradcheck(cp, rt, inputs, seeds, opt);
 
     if (rep.ok)
     {
